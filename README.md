@@ -1,14 +1,24 @@
-# New Horizons LSST Processing
+# lsst_deep_mop
 
-HSC / New Horizons processing on the LSST Science Pipelines (`latest_daily` / v30): ISR, synthetic SSO injection (SD-MOC), warps to sky patches, **multi-night** templates, and difference images.
+HSC / New Horizons processing on the LSST Science Pipelines (`latest_daily` / v30).
+
+**One EUPS / Python product** that provides both:
+
+| Python package | Role |
+|----------------|------|
+| `lsst_deep_mop` | Multi-night **image / visit selection** (`MovingTargetSelectVisitsTask`) for deep templates |
+| `sso_injection` | **SSO injection catalog builder** (SD-MOC sampling → Trail tables) + `InjectSsoVisitTask` |
+
+Downstream GalSim drawing uses stock LSST `source_injection` (no orbit logic there).
 
 ## Start here
 
 | Document | Purpose |
 |----------|---------|
-| [docs/NewHorizons_Pipeline_Runbook.md](docs/NewHorizons_Pipeline_Runbook.md) | Canonical setup and run instructions (Postgres → diffs) |
+| [docs/NewHorizons_Pipeline_Runbook.md](docs/NewHorizons_Pipeline_Runbook.md) | Full setup and run instructions (Postgres → diffs) |
+| [docs/SSO_Injection.md](docs/SSO_Injection.md) | SSO usage, Butler outputs, diagnostics, example orbit files |
 | [docs/QA_Checkpoints.md](docs/QA_Checkpoints.md) | QA gates after each stage |
-| [pipelines/NewHorizons.yaml](pipelines/NewHorizons.yaml) | Simplified pipeline with clear configuration points |
+| [pipelines/NewHorizons.yaml](pipelines/NewHorizons.yaml) | Canonical pipeline (ISR → inject → warp → template → diff) |
 
 Science flow:
 
@@ -18,60 +28,66 @@ raw → ingest → HSC/cp (build bias/flat) → certify into HSC/calib
     → multi-night template select/coadd → difference images
 ```
 
-Calibration collections: build under `HSC/cp/START-END`; certify into `HSC/calib` (no `HSC/calib/START-END` on later `-i` chains). Reference catalogs: `/arc/projects/LSST/refcats` (runbook §5).
-
-SSO catalogs come from `sso_injection` (heliocentric SD-MOC sampling) inside `#single_visit`; stock `source_injection` only draws Trails/Stars. No pre-built `fakes/{day_obs}` orbit table.
-
 ## Layout
 
 ```text
-NewHorizons/
+lsst_deep_mop/
   README.md
   docs/
     NewHorizons_Pipeline_Runbook.md
+    SSO_Injection.md
     QA_Checkpoints.md
-    archive/                         # historical student cookbook
+    arrokoth_injection_diagnostics.png   # example SSO diagnostic figure
   pipelines/
-    NewHorizons.yaml                 # use this
+    NewHorizons.yaml
+    generateSsoInjection.yaml
+  python/
+    lsst_deep_mop/     # MovingTargetSelectVisitsTask
+    sso_injection/     # SD-MOC catalog generation + inject wrapper
+  tests/
+  bin/
+    plot_injection_diagnostics.py
   configs/
-    butler_seed.template.yaml        # copy → butler_seed.yaml (secrets local only)
-    makeDirectWarpConfig.py
-  packages/
-    obs_subaru/                      # HSC + NH filters
-    sso_injection/                   # SD-MOC SSO catalogs + InjectSsoVisitTask
-    nh/                              # MovingTargetSelectVisitsTask
-  scripts/                           # legacy CANFAR qgraph helpers (cleanup planned)
-  DRP-Prod+injection_upd_JJK.yaml    # full DRP+injection reference only
+  scripts/
 ```
 
-## Packages
+## Setup
 
 ```bash
 setup lsst_distrib
-setup -r /path/to/packages/sso_injection -t ${USER}
-setup -r /path/to/packages/obs_subaru -t ${USER}
-setup -r /path/to/packages/nh -t ${USER}
+setup -r /path/to/lsst_deep_mop -t ${USER}
+setup -r /path/to/obs_subaru -t ${USER}   # NH filters / instrument
 ```
-
-`sso_injection` depends on stock `source_injection` from the distribution.
-
-Template visit selection also relates to [ijiraq/lsst_deep_mop](https://github.com/ijiraq/lsst_deep_mop).
 
 ## Pipeline subsets (`NewHorizons.yaml`)
 
 | Subset | Stage |
 |--------|--------|
-| `single_visit` | ISR, calibrate, generate SSO catalog, inject |
+| `single_visit` | ISR, calibrate, **generate SSO catalog**, inject |
 | `visit_summary` | Injected visit summaries |
 | `warp` | Direct + PSF-matched warps |
-| `template` | Multi-night select + goodSeeing coadd |
+| `template` | Multi-night **visit selection** + goodSeeing coadd |
 | `difference` | getTemplate + subtract |
 | `new_horizons_end_to_end` | Full path (prefer staged runs + QA) |
 
-## Known follow-ups
+Confirmed task classes in that YAML:
 
-- Parameterize date-/collection-hardcoded scripts under `scripts/`.
-- Fix git pre-commit issues in local package checkouts (uncommitted working changes may exist).
-- Deeper packaging integration with `lsst_deep_mop`.
+- `sso_injection.GenerateSsoInjectionCatalogTask` → `sso_injection_catalog`
+- `sso_injection.InjectSsoVisitTask` → `injected_calexp` / `injected_calexp_catalog`
+- `lsst_deep_mop.selectImages.MovingTargetSelectVisitsTask` → template visit selection
+
+## SSO diagnostics & example orbits
+
+See [docs/SSO_Injection.md](docs/SSO_Injection.md).
+
+```bash
+# Example diagnostic figure (fiducial vs +24h sky + element CDFs)
+python bin/plot_injection_diagnostics.py -o docs/arrokoth_injection_diagnostics.png
+
+# Example Keplerian + sky tables (no pipetask)
+python bin/write_example_orbits.py -o /tmp/sso_examples
+
+pytest tests/test_kepler_horizons.py tests/test_sdmoc.py -v
+```
 
 Historical notes: [docs/archive/LSST_Pipeline_v29_in_ARCADES.md](docs/archive/LSST_Pipeline_v29_in_ARCADES.md).

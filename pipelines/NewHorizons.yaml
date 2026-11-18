@@ -145,11 +145,10 @@ tasks:
 
   # ---------------------------------------------------------------------------
   # CONFIGURATION POINT: multi-night template visit selection
-  # Class lives in packages/nh (MovingTargetSelectVisitsTask).
-  # Related upstream: https://github.com/ijiraq/lsst_deep_mop
+  # Class: lsst_deep_mop.selectImages.MovingTargetSelectVisitsTask
   # ---------------------------------------------------------------------------
   selectTemplateVisits:
-    class: nh.selectImages.MovingTargetSelectVisitsTask
+    class: lsst_deep_mop.selectImages.MovingTargetSelectVisitsTask
     config:
       - qMin: 0.0
         qMax: 0.5

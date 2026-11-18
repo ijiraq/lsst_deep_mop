@@ -9,7 +9,7 @@ export SHELL=/bin/bash
 export USER=$(whoami)
 .  /opt/lsst/software/stack/loadLSST.bash
 setup lsst_distrib
-setup -r /arc/projects/NewHorizons/sso_injection -t ${USER}
+setup -r /arc/projects/NewHorizons/lsst_deep_mop -t ${USER}
 setup -r /arc/projects/NewHorizons/obs_subaru -t ${USER}
 # Optional: local source_injection fork only if you have non-SSO patches.
 # setup -r /arc/projects/NewHorizons/source_injection -t ${USER}

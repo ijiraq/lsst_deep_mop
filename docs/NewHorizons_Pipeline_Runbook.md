@@ -24,13 +24,11 @@ New Horizons needs to:
 
 - CANFAR science pipeline container with LSST Science Pipelines **latest_daily**.
 - Custom packages (setup order matters; see §2):
+  - [`lsst_deep_mop`](https://github.com/ijiraq/lsst_deep_mop) — this repo: multi-night visit selection (`lsst_deep_mop.selectImages`) **and** SD-MOC SSO injection (`sso_injection`).
   - [`packages/obs_subaru`](../packages/obs_subaru) — HSC instrument config (includes New Horizons filter definitions).
-  - [`packages/sso_injection`](../packages/sso_injection) — SD-MOC synthetic SSO catalog generation + `InjectSsoVisitTask`.
   - Stock `source_injection` from the LSST distribution (GalSim Trail/Star inject; no SSO logic). Use a local fork only if you have non-SSO patches.
-  - [`packages/nh`](../packages/nh) — `MovingTargetSelectVisitsTask` for multi-night template visit selection.
-- Upstream template-selection package: [ijiraq/lsst_deep_mop](https://github.com/ijiraq/lsst_deep_mop) (related logic; NH uses the local `nh` package in this repo).
-- Shared reference catalogs on CANFAR: `/arc/projects/LSST/refcats` (do not rebuild locally).
-- PostgreSQL-backed Butler registry (see §3).
+  - Shared reference catalogs on CANFAR: `/arc/projects/LSST/refcats` (do not rebuild locally).
+  - PostgreSQL-backed Butler registry (see §3).
 
 ### Working layout (typical)
 
@@ -62,10 +60,9 @@ export USER=$(whoami)
 . /opt/lsst/software/stack/loadLSST.bash
 setup lsst_distrib
 
-# Order: sso_injection (pulls source_injection), then obs_subaru so NH filters win.
-setup -r ${LSST_PACKAGES}/sso_injection -t ${USER}
+# One product: lsst_deep_mop (SSO + MovingTargetSelect), then obs_subaru so NH filters win.
+setup -r ${LSST_PACKAGES}/lsst_deep_mop -t ${USER}
 setup -r ${LSST_PACKAGES}/obs_subaru -t ${USER}
-setup -r ${LSST_PACKAGES}/nh -t ${USER}
 ```
 
 Getting the correct obs_subaru package is critical, the first time you setup a new processing environment be sure to confirm the instrument package is picking up our local version:
@@ -342,8 +339,8 @@ Circular-orbit prediction selects cells; injected orbits still carry `e`/`i` and
 
 | Task | Package | Role |
 |------|---------|------|
-| `generateSsoInjectionCatalog` | `sso_injection` | SD-MOC sample → `sso_injection_catalog` (per visit/detector) |
-| `inject_visit` (`InjectSsoVisitTask`) | `sso_injection` | Reads that catalog; GalSim inject via stock `VisitInjectTask` |
+| `generateSsoInjectionCatalog` | `sso_injection` (in `lsst_deep_mop`) | SD-MOC sample → `sso_injection_catalog` |
+| `inject_visit` (`InjectSsoVisitTask`) | `sso_injection` (in `lsst_deep_mop`) | GalSim inject via stock `VisitInjectTask` |
 
 ### YAML knobs (`population.*`)
 
@@ -365,6 +362,8 @@ Edit under `generateSsoInjectionCatalog` in [`pipelines/NewHorizons.yaml`](../pi
 TNO / NH: modest motion expansion and fuzz. Faster movers use the same algorithm with larger \(n\Delta t\) at small `r`.
 
 **QA gate:** after `#single_visit`, query `sso_injection_catalog` and `injected_calexp_catalog` for a sample detector; check Trail columns (`ra`, `dec`, `mag`, `trail_length`, `beta`) and non-empty inject masks where expected (see QA doc).
+
+Full SSO usage, outputs, diagnostics, and example orbit-file recipes: [`SSO_Injection.md`](SSO_Injection.md).
 
 ---
 
@@ -449,7 +448,7 @@ Legacy helpers: `scripts/create_makeWarp_qgraphs.sh`, `scripts/create_newhorizon
 
 Moving Solar System objects leave trails in single-night deep stacks. Templates for New Horizons are built from **multiple nights** so that a moving source does not land in the same pixels across the stack and is suppressed in the mean coadd.
 
-Visit selection uses `nh.selectImages.MovingTargetSelectVisitsTask`, which:
+Visit selection uses `lsst_deep_mop.selectImages.MovingTargetSelectVisitsTask`, which:
 
 - Splits candidate visits into `nGroups` time groups across the available timespan.
 - Within each group, keeps a seeing quantile (`qMin`–`qMax`) with at least `nVisitsMin` visits.
@@ -578,7 +577,7 @@ Notes:
 | Recertify calibs | Cannot recertify the same date range into `HSC/calib` again; use a new destination collection or a non-overlapping timespan. Rebuild under a new `HSC/cp/START-END` if needed. Use `--search-all-inputs` after partial rebuilds. |
 | Partial rerun | Add `--skip-existing-in <output_collection>`. |
 | Duplicate datasets / skymap failures | Avoid merging half-finished qgraphs; search logs missing `and 0 remain`. |
-| Package order | `sso_injection` then `obs_subaru` then `nh`. |
+| Package order | `lsst_deep_mop` then `obs_subaru`. |
 | Disk full | Symptoms include inability to save files; free space before continuing. |
 
 ---
@@ -590,9 +589,8 @@ Notes:
 | [`pipelines/NewHorizons.yaml`](../pipelines/NewHorizons.yaml) | Canonical NH pipeline (use this) |
 | [`DRP-Prod+injection_upd_JJK.yaml`](../DRP-Prod+injection_upd_JJK.yaml) | Full DRP+injection reference |
 | [`packages/obs_subaru`](../packages/obs_subaru) | HSC / NH instrument |
-| [`packages/sso_injection`](../packages/sso_injection) | SD-MOC SSO catalogs + `InjectSsoVisitTask` |
+| This repo (`lsst_deep_mop`) | SSO catalogs + multi-night visit selection |
 | Stock `source_injection` | GalSim Trail/Star inject (no SSO) |
-| [`packages/nh`](../packages/nh) | Multi-night visit selection |
 | [`configs/`](../configs) | Butler seed template, warp configs |
 | [`scripts/`](../scripts) | Legacy date-hardcoded qgraph drivers (cleanup planned) |
 | [`docs/archive/`](archive/) | Historical student cookbook |
@@ -600,8 +598,8 @@ Notes:
 ### Follow-ups (not in this documentation pass)
 
 - Parameterize qgraph scripts (replace date/collection hardcoding).
-- Resolve git pre-commit issues in local `obs_subaru` / `sso_injection` checkouts.
-- Closer integration / packaging of [lsst_deep_mop](https://github.com/ijiraq/lsst_deep_mop).
+- Resolve git pre-commit issues in local `obs_subaru` / `lsst_deep_mop` checkouts.
+- Retire or archive the standalone `sso_injection` git remote now that code lives here.
 
 ---
 

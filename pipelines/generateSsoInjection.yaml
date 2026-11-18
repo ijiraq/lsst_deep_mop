@@ -1,0 +1,23 @@
+description: >
+  Generate per-visit/detector synthetic SSO Trail catalogs (SD-MOC sampling)
+  for InjectSsoVisitTask / stock VisitInjectTask GalSim injection.
+tasks:
+  generateSsoInjectionCatalog:
+    class: sso_injection.GenerateSsoInjectionCatalogTask
+    config:
+      # CONFIGURATION POINT: orbit population / SD-MOC model
+      population.density: 10000
+      population.master_seed: 20240611
+      population.model_epoch_mjd: 60500.0
+      population.healpix_order: 8
+      # Shells equal in r^2 between inner/outer (uniform sky-rate weight).
+      population.distance_inner_au: 30.0
+      population.distance_outer_au: 50.0
+      population.n_distance_bins: 4
+      population.mag_limits: [22.0, 27.0]
+      population.h_limits: [5.0, 12.0]
+      population.eccentricity_max: 0.2
+      population.inclination_max_deg: 30.0
+      population.eccentricity_fuzz: 0.2
+      population.inclination_fuzz_deg: 5.0
+      population.source_type: Trail
