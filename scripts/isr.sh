@@ -1,0 +1,11 @@
+pipetask run \
+    -b $1 \
+    -i HSC/raw/all,refcats,HSC/calib,HSC/calib/run1 \
+    -j 16 \
+    -o u/NH/processCCD \
+    -p pipelines/NHPipeline.yaml#processCcd \
+    -d "instrument='HSC' AND visit.day_obs=20240801 AND detector=0 AND band='gri'" \
+    -c isr:doDark=False \
+    --output-run u/NH/processCCD/run5 \
+    --clobber-outputs \
+    --skip-existing-in u/NH/processCCD 

@@ -1,0 +1,36 @@
+
+logline(){
+    local COLUMNS=$(tput cols) 
+    local msg=$1
+    local LEN=$((($COLUMNS-${#msg}-2)/2))
+    for i in $(seq 1 $LEN); do echo -n "#"; done
+    echo -n " $msg "
+    for i in $(seq 2 $LEN); do echo -n "#"; done
+    echo -ne "#\r"
+}
+
+BASE_DIR="/arc/projects/NewHorizons/HSC_2024"
+PIPE_DIR="${BASE_DIR}/${PIPE_DIR}"
+pipeline="${PIPE_DIR}/DRP-Prod+injection_upd_JJK.yaml"
+butler_dir="{BASE_DIR}/PG2_BUTLER"
+
+# File location to store qgraphs for execution.
+hold_dir="${butler_dir}/qgraphs/hold"
+queue_dir="${butler_dir}/qgraphs/queue"
+processing_dir="${butler_dir}/qgraphs/processing"
+processed_dir="${butler_dir}/qgraphs/processed"
+merging_dir="${butler_dir}/qgraphs/merging"
+merged_dir="${butler_dir}/qgraphs/merged"
+failed_dir="${butler_dir}/qgraphs/failed"
+
+decalre -a status_dirs=($hold_dir $queue_dir $processing_dir $processed_dir $merging_dir $merged_dir $failed_dir)
+
+function qgraph_exists() {
+    # check if given directory exists and take apropriate action
+    filename=$1
+    for dirname in ${status_dir[@]}
+    do
+	[[ -f "$filename" ]] && logline "$filename" && return
+    done
+    false
+    }

@@ -1,0 +1,96 @@
+#!/bin/bash
+dir="$(dirname "${0}")"
+cmd="$(basename "${0}")"
+echo "$cmd ${@}"
+source "${dir}/qgraphs.sh" || exit
+setup_qgraph_dirs ${butler_dir}/qgraphs 
+
+subset="diff_makeDirectWarp"
+skymap='big_2025'
+
+output_collection="u/NH/coadd"
+output_type="-o"
+
+
+function show_help() {
+    cat <<EOF 
+
+Usage: $cmd DETECTOR [-r] [-q] [VISIT]
+
+-r : Redo building the quantum graph file
+-q : put into $queue_dir otherwise goes into $hold_dir
+
+ouptut_collection=${output_collection}
+skymap=${skymap}
+
+If input_collections is NONE then use output_collection to find inputs.
+
+Builds a qg for task ${pipeline}#${subset} for detector id passed to script.
+
+Set the value of VISIT to only process that VISIT, else all VISIST are processed in one qg.
+
+Qgraphs are stored in ${qgraph_dir}/${subset}-VISIT-DETECTOR.qg and can be run
+using the run_single_qgraph.sh script.
+
+Likely you want to launch a bunch of qrunners.
+
+
+EOF
+}
+
+skip=true
+dest_type="hold"
+OPTIND=1
+while getopts "l:hrq" opt; do
+   case "${opt}" in
+       h) show_help
+          exit 0
+          ;;
+       r) skip=false ;;
+       q) dest_type="queue" ;;
+       *) show_help >& 1
+          exit 2
+          ;;
+   esac
+done
+shift $(( OPTIND - 1 ))
+
+
+if [ $# -ne 2 ] 
+then
+   show_help
+   exit -1
+fi
+
+day_obs=$1 && shift
+patch=$1 && shift
+visit="patch"
+
+
+logline "Patch: ${patch}"
+dataset="instrument='HSC' AND patch=${patch} AND skymap='${skymap}' AND tract=0 AND day_obs=${day_obs}"
+qgraph="${subset/,/_}-${visit}-${patch}.qg"
+
+# skip this detector if a matching log file already exists and redo != true
+
+if [[ "${skip}" = "true" ]] then
+   qgraph_exists "$qgraph" && exit
+fi
+
+qgraph_file="${status_dirs["build"]}"/"${qgraph}"
+
+# avoid a race condition in build area
+[ -f "${qgraph_file}" ] && echo "Remove file from build area" && exit
+touch "${qgraph_file}" || exit
+logline "${qgraph_file}"
+
+pipetask --log-level INFO --long-log qgraph \
+	 -p "${pipeline}#${subset}" \
+	 -b "${butler_dir}" \
+	 -d "${dataset}" \
+	 -o "${output_collection}" \
+	 --qgraph-datastore-records \
+	 --rebase \
+	 --clobber-outputs \
+	 -q ${qgraph_file}  && mv --no-copy --force "${qgraph_file}" "${status_dirs[$dest_type]}"
+

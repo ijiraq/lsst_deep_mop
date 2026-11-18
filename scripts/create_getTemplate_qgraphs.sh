@@ -1,0 +1,115 @@
+#!/bin/bash
+cmd=$(basename $0)
+echo "$cmd ${@}"
+
+subset="injected_getTemplate"
+# subset="injected_makePsfMatchedWarp"
+DEFAULT_PIPE_DIR="/arc/projects/NewHorizons/HSC_2024/pipelines"
+PIPE_DIR="${PIPE_DIR-$DEFAULT_PIPE_DIR}"
+pipeline="${PIPE_DIR}/DRP-Prod+injection_upd_JJK.yaml"
+# Base Butler directory.
+butler_dir="/arc/projects/NewHorizons/HSC_2024/PG2_BUTLER"
+
+# File location to store qgraphs for execution.
+queue_dir="${butler_dir}/qgraphs/queue"
+processing_dir="${butler_dir}/qgraphs/processing"
+processed_dir="${butler_dir}/qgraphs/processed"
+merged_dir="${butler_dir}/qgraphs/merged"
+failed_dir="${butler_dir}/qgraphs/failed"
+build_dir="${butler_dir}/qgraphs/build"
+
+# input_collections="u/NH/newer-processCCD/20250722,u/NH/newer-processCCD/20250721,skymaps"
+# input_collections="u/NH/coadd"
+input_collections="u/NH/fakes,skymaps"
+output_collection="u/NH/coadd"
+output_type="-o"
+
+
+function show_help() {
+    cat <<EOF 
+
+Usage: ${cmd}
+
+Builds a qgraph for task ${pipeline}#${subset} for all visits in ${visit_list} and all detectors.
+
+If a qgraph exists already skip this visit/detector combination
+
+Qgraphs are stored in ${qgraph_dir}/${subset}-${output_collection//\//-}-VISIT-DETECTOR.qg and can be run
+using run_single_qgraph.sh.  
+
+Likely you want to launch a bunch of qrunners.
+
+input_collections=${input_collections}
+ouptut_collection=${output_collection}
+
+EOF
+}
+
+OPTIND=1
+while getopts l:h opt; do
+   case "${opt}" in
+       h) show_help
+          exit 0
+          ;;
+       *) show_help >& 1
+          exit 2
+          ;;
+   esac
+done
+shift $(( OPTIND - 1 ))
+
+
+if [ $# -ne 1 ] 
+then
+   show_help
+   exit -1
+fi
+
+logline(){
+    local COLUMNS=$(tput cols) 
+    local msg=$1
+    local LEN=$((($COLUMNS-${#msg}-2)/2))
+    for i in $(seq 1 $LEN); do echo -n "#"; done
+    echo -n " $msg "
+    for i in $(seq 2 $LEN); do echo -n "#"; done
+    echo -ne "#\r"
+}
+detector=$1
+# do a job for each visit/detector.
+# for visit in $(butler query-dimension-records PG2_BUTLER visit --datasets injected_calexp --collections ${input_collections} | grep 202507 | sort -k 2n | awk ' {print $2} ')
+# do
+    # logline "Visit: ${visit}"
+    # for detector in $(seq 0 103)
+    # do
+	# [ $detector -eq 9 ] && continue
+	# [ $detector -eq 21 ] && continue
+	# logline "Detector: ${detector}"
+	skymap='big_2025'
+	# dataset="instrument='HSC' AND visit=${visit} AND detector!=9 AND detector!=21 AND skymap='${skymap}'"
+	# dataset="instrument='HSC' AND visit in ${visit} AND detector=${detector} AND skymap='${skymap}'"
+	dataset="instrument='HSC' and visit>=371056 and visit<=371228 and observation_reason='science' and detector=${detector} AND skymap='${skymap}'"
+	qgraph="${subset/,/_}-${output_collection//\//-}-20250822-${detector}.qg"
+	skip=0
+	for dirname in "$build_dir" "$queue_dir" "$processing_dir" "$processed_dir" "$merged_dir" "$failed_dir"
+	do
+	    qgraph_file="${dirname}/${qgraph}"
+	    [ -f ${qgraph_file} ] && skip=1 && logline ${qgraph_file} && break
+	    # [ -f ${qgraph_file} ] && rm ${qgraph_file}
+	done
+	[ $skip -gt 0 ] && exit
+	qgraph_file=${build_dir}/${qgraph}
+	logline "${qgraph_file}"
+	echo ""
+	[ -f ${qgraph_file} ] && continue || touch ${qgraph_file}
+    
+	pipetask --log-level INFO --long-log qgraph \
+		 -p $pipeline#$subset \
+		 -b $butler_dir \
+		 -d "$dataset" \
+		 -i $input_collections \
+		 -o $output_collection \
+		 --qgraph-datastore-records \
+		 --rebase \
+		 --clobber-outputs \
+		 -q ${qgraph_file} && mv ${qgraph_file} ${queue_dir}
+# done

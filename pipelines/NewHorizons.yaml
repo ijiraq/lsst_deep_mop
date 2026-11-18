@@ -1,0 +1,269 @@
+# =============================================================================
+# New Horizons HSC pipeline (LSST Science Pipelines v29)
+# =============================================================================
+# Canonical science path for New Horizons:
+#   ISR -> calibrate -> inject synthetic sources -> warp to sky patches
+#   -> multi-night template selection/coadd -> difference images
+#
+# Full DRP+injection reference (do not start here as a new user):
+#   ../DRP-Prod+injection_upd_JJK.yaml
+#
+# Runbook:
+#   ../docs/NewHorizons_Pipeline_Runbook.md
+#
+# Example:
+#   pipetask run -b $BUTLER_DIR \
+#     -i HSC/raw/all,refcats,HSC/calib \
+#     -o u/NH/processCCD/$DAY \
+#     -p $PIPE_DIR/NewHorizons.yaml#single_visit
+# =============================================================================
+description: >
+  New Horizons HSC synthetic SSO injection (sso_injection SD-MOC → Trail) and
+  multi-night difference-imaging pipeline. Configuration points are marked
+  below; edit those (or pass -c on the command line) rather than forking this
+  file.
+instrument: lsst.obs.subaru.HyperSuprimeCam
+
+# -----------------------------------------------------------------------------
+# CONFIGURATION POINT: top-level switches and defaults
+# Override with:  -c isr:doDark=False
+#                 -c selectTemplateVisits:nGroups=5
+# -----------------------------------------------------------------------------
+parameters:
+  # --- ISR / calibration ---
+  do_dark: false
+
+  # --- Astrometry (calibrateImage) ---
+  # Tighten or loosen if visit solutions fail or are too slow.
+  astrometry_max_iter: 7
+  astrometry_max_mean_distance_arcsec: 0.01
+
+  # --- Multi-night template visit selection (MovingTargetSelectVisitsTask) ---
+  # Split visits into nGroups across the timespan; within each group keep the
+  # best-seeing quantile [qMin, qMax] with at least nVisitsMin visits.
+  # Multi-night grouping suppresses moving-source trails in the mean template.
+  template_q_min: 0.0
+  template_q_max: 0.5
+  template_n_groups: 5
+  template_n_visits_min: 10
+
+  # --- Template coadd ---
+  template_bad_mask_planes:
+    - NO_DATA
+    - BAD
+    - CR
+    - INTRP
+    - SUSPECT
+  template_subregion_size: [1000, 200]
+
+tasks:
+
+  # ---------------------------------------------------------------------------
+  # CONFIGURATION POINT: ISR
+  # ---------------------------------------------------------------------------
+  isr:
+    class: lsst.ip.isr.IsrTask
+    config:
+      - doDark: false
+        doAmpOffset: true
+        ampOffset.doApplyAmpOffset: true
+
+  # ---------------------------------------------------------------------------
+  # CONFIGURATION POINT: single-visit calibration (astrometry / photometry)
+  # ---------------------------------------------------------------------------
+  calibrateImage:
+    class: lsst.pipe.tasks.calibrateImage.CalibrateImageTask
+    config:
+      - connections.initial_stars_schema: src_schema
+        connections.stars_footprints: src
+        connections.stars: source
+        connections.exposure: calexp
+        connections.background: calexpBackground
+      # Prefer command-line -c for campaign-specific astrometry tuning:
+      #   -c calibrateImage:astrometry.maxIter=7
+      #   -c calibrateImage:astrometry.maxMeanDistanceArcsec=0.01
+
+  # ---------------------------------------------------------------------------
+  # CONFIGURATION POINT: synthetic SSO catalog (sso_injection / SD-MOC)
+  # Population knobs: density, seed, model epoch, distance bins, mag/H, fuzz.
+  # ---------------------------------------------------------------------------
+  generateSsoInjectionCatalog:
+    class: sso_injection.GenerateSsoInjectionCatalogTask
+    config:
+      - connections.input_exposure: calexp
+        connections.output_catalog: sso_injection_catalog
+        population.density: 10000
+        population.master_seed: 20240611
+        population.model_epoch_mjd: 60500.0
+        population.healpix_order: 8
+        # Uniform in r^2 between bounds (sky-rate weight; rate ~ r**(-1/2)).
+        population.distance_inner_au: 30.0
+        population.distance_outer_au: 50.0
+        population.n_distance_bins: 4
+        population.source_type: Trail
+
+  # ---------------------------------------------------------------------------
+  # CONFIGURATION POINT: inject Trails via stock GalSim (no SSO knowledge)
+  # Reads per-detector catalog from generateSsoInjectionCatalog.
+  # ---------------------------------------------------------------------------
+  inject_visit:
+    class: sso_injection.InjectSsoVisitTask
+    config:
+      - external_psf: false
+        external_photo_calib: false
+        external_wcs: false
+        connections.input_exposure: calexp
+        connections.output_exposure: injected_calexp
+        connections.output_catalog: injected_calexp_catalog
+        connections.injection_catalogs: sso_injection_catalog
+
+  # Visit summaries for injected calexps (needed by warps / selection).
+  injected_consolidateVisitSummary:
+    class: lsst.pipe.tasks.postprocess.ConsolidateVisitSummaryTask
+    config:
+      - connections.calexp: injected_calexp
+        connections.visitSummarySchema: injected_visitSummary_schema
+        connections.visitSummary: injected_visitSummary
+
+  # ---------------------------------------------------------------------------
+  # CONFIGURATION POINT: warps
+  # Optional external config file (place under configs/):
+  #   file: [$CONFIG_DIR/makeDirectWarpConfig.py]
+  # ---------------------------------------------------------------------------
+  injected_makeDirectWarp:
+    class: lsst.drp.tasks.make_direct_warp.MakeDirectWarpTask
+    config:
+      - connections.calexp_list: injected_calexp
+        connections.visit_summary: injected_visitSummary
+        connections.warp: injected_directWarp
+
+  injected_makePsfMatchedWarp:
+    class: lsst.drp.tasks.make_psf_matched_warp.MakePsfMatchedWarpTask
+    config:
+      - connections.direct_warp: injected_directWarp
+        connections.psf_matched_warp: injected_psfMatchedWarp
+
+  # ---------------------------------------------------------------------------
+  # CONFIGURATION POINT: multi-night template visit selection
+  # Class lives in packages/nh (MovingTargetSelectVisitsTask).
+  # Related upstream: https://github.com/ijiraq/lsst_deep_mop
+  # ---------------------------------------------------------------------------
+  selectTemplateVisits:
+    class: nh.selectImages.MovingTargetSelectVisitsTask
+    config:
+      - qMin: 0.0
+        qMax: 0.5
+        nGroups: 5
+        nVisitsMin: 10
+        connections.goodVisits: injected_goodSeeingVisits
+        connections.visitSummaries: injected_visitSummary
+
+  # ---------------------------------------------------------------------------
+  # CONFIGURATION POINT: good-seeing template coadd
+  # ---------------------------------------------------------------------------
+  injected_templateGen:
+    class: lsst.drp.tasks.assemble_coadd.CompareWarpAssembleCoaddTask
+    config:
+      - doSelectVisits: true
+        subregionSize: [1000, 200]
+        assembleStaticSkyModel.doSelectVisits: true
+        doNImage: true
+        badMaskPlanes: ["NO_DATA", "BAD", "CR", "INTRP", "SUSPECT"]
+        connections.outputCoaddName: injected_goodSeeing
+        connections.inputWarps: injected_directWarp
+        connections.psfMatchedWarps: injected_psfMatchedWarp
+      - connections.selectedVisits: injected_goodSeeingVisits
+        connections.coaddExposure: injected_goodSeeingCoadd
+        connections.nImage: injected_goodSeeingCoadd_nImage
+
+  # ---------------------------------------------------------------------------
+  # CONFIGURATION POINT: difference imaging
+  # ---------------------------------------------------------------------------
+  injected_getTemplate:
+    class: lsst.ip.diffim.getTemplate.GetTemplateTask
+    config:
+      - connections.coaddName: injected_goodSeeing
+        connections.coaddExposures: injected_goodSeeingCoadd
+        connections.template: injected_goodSeeingDiff_templateExp
+        connections.bbox: injected_calexp.bbox
+        connections.wcs: injected_calexp.wcs
+
+  injected_subtractImages:
+    class: lsst.ip.diffim.subtractImages.AlardLuptonSubtractTask
+    config:
+      - allowKernelSourceDetection: true
+        connections.science: injected_calexp
+        connections.coaddName: injected_goodSeeingCoadd
+        connections.template: injected_goodSeeingDiff_templateExp
+        connections.difference: injected_goodSeeingDiff_differenceTempExp
+        connections.matchedTemplate: injected_goodSeeingDiff_matchedExp
+        connections.kernelSources: injected_goodSeeingDiff_psfMatchSources
+        connections.psfMatchingKernel: injected_goodSeeingDiff_psfMatchKernel
+
+subsets:
+
+  # Per-detector: ISR, calibrate, inject.
+  single_visit:
+    subset:
+      - isr
+      - calibrateImage
+      - generateSsoInjectionCatalog
+      - inject_visit
+    description: >
+      Create ISR-calibrated calexps, generate per-detector SSO Trail catalogs
+      (sso_injection SD-MOC), and inject with stock GalSim. Requires raws,
+      calibs, and refcats (no pre-built fakes/{day_obs} orbit table).
+
+  # After single_visit: build visit summary for warps / selection.
+  visit_summary:
+    subset:
+      - injected_consolidateVisitSummary
+    description: >
+      Aggregate detector-level injected calexps into injected_visitSummary.
+
+  # Warp injected calexps onto the skymap.
+  warp:
+    subset:
+      - injected_makeDirectWarp
+      - injected_makePsfMatchedWarp
+    description: >
+      Direct and PSF-matched warps of injected_calexp onto sky patches.
+      Requires skymaps and visit summaries.
+
+  # Multi-night template selection + coadd.
+  template:
+    subset:
+      - selectTemplateVisits
+      - injected_templateGen
+    description: >
+      Select multi-night good-seeing visits and assemble the injected
+      goodSeeing template coadd (trails suppressed across nights).
+
+  # Difference imaging against the template.
+  difference:
+    subset:
+      - injected_getTemplate
+      - injected_subtractImages
+    description: >
+      Build per-exposure templates from the coadd and subtract from
+      injected_calexp to produce difference images.
+
+  # Convenience: full NH science path after calibs/refcats/skymap exist.
+  # In practice run stage subsets separately for qgraph control and QA gates.
+  new_horizons_end_to_end:
+    subset:
+      - isr
+      - calibrateImage
+      - generateSsoInjectionCatalog
+      - inject_visit
+      - injected_consolidateVisitSummary
+      - injected_makeDirectWarp
+      - injected_makePsfMatchedWarp
+      - selectTemplateVisits
+      - injected_templateGen
+      - injected_getTemplate
+      - injected_subtractImages
+    description: >
+      Full New Horizons path from ISR through difference imaging.
+      Prefer stage subsets (single_visit, warp, template, difference) in
+      production so QA checkpoints can be applied between stages.

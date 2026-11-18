@@ -1,0 +1,22 @@
+# =============================================================================
+# Butler PostgreSQL seed TEMPLATE for New Horizons
+# =============================================================================
+# Copy to butler_seed.yaml (gitignored / local only) and fill in secrets:
+#
+#   cp configs/butler_seed.template.yaml configs/butler_seed.yaml
+#
+# Then create the repo:
+#
+#   butler create --seed-config $CONFIG_DIR/butler_seed.yaml --override $BUTLER_DIR
+#
+# Do NOT commit real passwords. Rotate any credentials that were previously
+# stored in scripts/butler_postgreSQL_seed.yaml.
+# =============================================================================
+registry:
+  # Full SQLAlchemy-style URL without embedded credentials is preferred when
+  # username/password are supplied separately below.
+  db: "postgresql://HOST:5432/DATABASE"
+  # Schema / namespace inside the database (LSST key name is "namespace").
+  namespace: "BUTLER_v29"
+  username: "butler"
+  password: "<SET_FROM_SECRETS_STORE>"

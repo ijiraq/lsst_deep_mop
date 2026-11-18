@@ -1,0 +1,63 @@
+#!/bin/bash
+source /arc/home/jkavelaars/.bash_profile
+shopt -s nullglob 
+export PROGNAME=${0##*\/}
+
+
+# echo "Initializing LSST environment"
+# set -a
+# # init the LSST Science Pipiline environment
+# export SHELL=/bin/bash
+# export USER=$(whoami)
+# export DAF_BUTLER_CACHE_DIRECTORY=/scratch/${USER}
+# mkdir -p ${DAF_BUTLER_CACHE_DIRECTORY}
+# .  /opt/lsst/software/stack/loadLSST.bash
+# setup lsst_distrib
+# setup -r /arc/projects/NewHorizons/source_injection -t  ${USER}
+# setup -r /arc/projects/NewHorizons/obs_subaru -t ${USER}
+
+
+BUTLER=/arc/projects/NewHorizons/HSC_2024/PG2_BUTLER
+QGRAPH_DIR=${BUTLER}/qgraphs
+# CORES=${CORES:-8}
+CORES=${OMP_NUM_THREADS:-1}
+THREADS=${CORES}
+
+# setup the structure for queue jobs
+export QUEUE_DIR="${QGRAPH_DIR}/queue"
+echo "Running ${PRGNAME} using ${THREADS} threads for jobs in ${QUEUE_DIR}"
+
+export PROCESSING_DIR="${QGRAPH_DIR}/processing" && mkdir -p ${PROCESSING_DIR} || exit -1
+export PROCESSED_DIR="${QGRAPH_DIR}/processed" && mkdir -p ${PROCESSED_DIR} || exit -1
+export LOG_DIR="${QGRAPH_DIR}/logs" && mkdir -p ${LOG_DIR} || exit -1
+export FAILED_DIR="${QGRAPH_DIR}/failed" && mkdir -p ${FAILED_DIR} || exit -1
+
+launch_time=$(date +%s)
+wait_time_in_seconds=86900
+while (( (( $(date +%s) - launch_time )) < "$wait_time_in_seconds" ))
+do
+    export QUEUE_DIR="${QGRAPH_DIR}/queue" && mkdir -p ${QUEUE_DIR} || exit -1
+    for FILENAME in ${QUEUE_DIR}/*.qg
+    do
+        export PROCESSING_DIR="${QGRAPH_DIR}/processing" && mkdir -p ${PROCESSING_DIR} || exit -1
+        export PROCESSED_DIR="${QGRAPH_DIR}/processed" && mkdir -p ${PROCESSED_DIR} || exit -1
+        export LOG_DIR="${QGRAPH_DIR}/logs" && mkdir -p ${LOG_DIR} || exit -1
+        export FAILED_DIR="${QGRAPH_DIR}/failed" && mkdir -p ${FAILED_DIR} || exit -1
+	QGRAPH="${PROCESSING_DIR}/${FILENAME##*\/}"
+	LOGFILE="${LOG_DIR}/${FILENAME##*\/}"
+	LOGFILE="${LOGFILE%.*}.log"
+
+	mv -v "$FILENAME" "$QGRAPH"  >& /dev/null || continue
+	echo "Processing ${FILENAME##*\/} using $THREADS cores with log $LOGFILE"
+	
+	pipetask --long-log --log-level INFO --log-file ${LOGFILE} --no-log-tty run-qbb \
+		 "$BUTLER" -j "$THREADS" \
+		 "$QGRAPH" && mv "$QGRAPH" "$PROCESSED_DIR" || mv "$QGRAPH" "$FAILED_DIR"
+	launch_time=$(date +%s)
+    done
+    end_of_wait=$(( launch_time + wait_time_in_seconds ))
+    end_of_wait=$(date --date="@$end_of_wait")
+    echo "$(date): Waiting for more jobs until $end_of_wait"
+    sleep 600
+done
+echo $(( $(date +%s) - launch_time ))

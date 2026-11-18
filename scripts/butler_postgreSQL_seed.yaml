@@ -1,0 +1,14 @@
+# DEPRECATED: do not use this file with real credentials.
+# Canonical template (no secrets):
+#   ../configs/butler_seed.template.yaml
+#
+# Copy the template to configs/butler_seed.yaml (local only), fill secrets from
+# your password manager, and create the Butler with:
+#   butler create --seed-config $CONFIG_DIR/butler_seed.yaml --override $BUTLER_DIR
+#
+# If this file previously contained a live password, rotate that credential.
+registry:
+  db: "postgresql://HOST:5432/DATABASE"
+  namespace: "BUTLER_v29"
+  username: "butler"
+  password: "<SET_FROM_SECRETS_STORE>"

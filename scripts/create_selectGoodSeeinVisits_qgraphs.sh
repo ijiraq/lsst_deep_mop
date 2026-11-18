@@ -1,0 +1,93 @@
+#!/bin/bash
+cmd=$(basename $0)
+echo "${cmd} ${@}"
+
+subset="selectGoodSeeingVisits"
+subset="injected_selectGoodSeeingVisits"
+# if subset includes 'step1' then turn of doDark
+# config="--config injected_selectGoodSeeingVisits:qMax=0.5 --config injected_selectGoodSeeingVisits:nVisitsMin=15"
+$(echo ${subset} | grep -q "step1" ) && config="--config isr:doDark=False"
+
+pipeline="/arc/projects/NewHorizons/HSC_2024/pipelines/DRP-Prod+injection_upd_JJK.yaml"
+butler_dir="/arc/projects/NewHorizons/HSC_2024/PG2_BUTLER"
+qgraph_dir="${butler_dir}/qgraphs/queue"
+
+# File location to store qgraphs for execution.
+queue_dir="${butler_dir}/qgraphs/queue"
+processing_dir="${butler_dir}/qgraphs/processing"
+processed_dir="${butler_dir}/qgraphs/processed"
+merged_dir="${butler_dir}/qgraphs/merged"
+mkdir -p ${queue_dir}
+
+
+day_obs=20250722
+# input_collections="HSC/raw/all,HSC/calib,refcats"
+# input_collections="u/NH/newer-processCCD/20250721,u/NH/newer-processCCD/20250722,skymaps"
+# input_collections="u/NH/multi"
+output_collection="u/NH/coadd"
+
+function show_help() {
+    cat <<EOF 
+
+Usage: ${cmd} DETECTOR
+
+Builds a qgraph for task ${pipeline}#${subset}  on ${day_obs}.  
+
+Qgraphs are stored in ${qgraph_dir}/${subset}-DETECTOR.qgraph and can be run
+using run_single_qgraph.sh.  
+
+Likely you want to launch a bunch of qrunners.
+
+input_collections=${input_collections}
+ouptut_collection=${output_collection}
+
+EOF
+}
+
+OPTIND=1
+while getopts l:h opt; do
+   case "${opt}" in
+       h) show_help
+          exit 0
+          ;;
+       *) show_help >& 1
+          exit 2
+          ;;
+   esac
+done
+shift $(( OPTIND - 1 ))
+
+
+if [ $# -ne 1 ] 
+then
+   show_help
+   exit -1
+fi
+
+patch=$1 && shift
+dataset="instrument='HSC' and visit.day_obs>20250701 AND visit.observation_reason='science' AND skymap='big_2025' and band='gri' and tract=0 and patch=${patch}" 
+
+
+qgraph="${subset/,/_}-${patch}-redo.qg"
+skip=0
+for dirname in "$queue_dir" "$processing_dir" "$processed_dir" "$merged_dir"
+do
+    qgraph_file="${dirname}/${qgraph}"
+    [ -f ${qgraph_file} ] && skip=1 && echo ${qgraph_file} && break
+done
+[ $skip -gt 0 ] && exit
+qgraph_file=${queue_dir}/${qgraph}
+echo "${qgraph_file}"
+
+
+pipetask qgraph \
+	 -p "${pipeline}#${subset}" ${config}\
+	 -b "${butler_dir}" \
+	 -d "${dataset}" \
+	 -o "${output_collection}" \
+	 --qgraph-datastore-records \
+	 --rebase \
+	 -q ${qgraph_file}  
+
+# --show "dump-config=MovingTargetSelectVisitsTask" \
+# -i "${input_collections}" 
