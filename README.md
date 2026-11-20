@@ -55,8 +55,8 @@ lsst_deep_mop/
 
 ```bash
 setup lsst_distrib
-setup -r /path/to/lsst_deep_mop -t ${USER}
-setup -r /path/to/obs_subaru -t ${USER}   # NH filters / instrument
+setup -r /arc/projects/NewHorizons/lsst_deep_mop -t ${USER}
+setup -r /arc/projects/NewHorizons/obs_subaru -t ${USER}   # NH filters / instrument
 ```
 
 ## Pipeline subsets (`NewHorizons.yaml`)

@@ -103,7 +103,7 @@ The Postgres database must already exist and the Butler user must be able to cre
 ```bash
 butler create --seed-config ${CONFIG_DIR}/butler_seed.yaml --override ${BUTLER_DIR}
 butler register-instrument ${BUTLER_DIR} lsst.obs.subaru.HyperSuprimeCam
-butler write-curated-calibrations ${BUTLER_DIR} lsst.obs.subaru.HyperSuprimeCam
+butler write-curated-calibrations ${BUTLER_DIR} lsst.obs.subaru.HyperSuprimeCam --collections HSC/calib
 ```
 
 `write-curated-calibrations` populates the **`HSC/calib`** collection with *instrument-package* products that ISR needs for every detector: `camera`, `defects`, `bfKernel`, and the various `transmission_*` datasets (see `obs_subaru` curated types). These are not the nightly bias/flat masters you build later; they are static (or slowly changing) instrument recipes shipped with the HSC package. Later, when you `certify-calibrations` masters built under `HSC/cp/…`, those bias/flat products are registered into the same **`HSC/calib`** collection with `--begin-date` / `--end-date` so downstream ISR can select them by exposure date.
@@ -262,7 +262,7 @@ pipetask run --register-dataset-types \
   -i HSC/raw/all,HSC/calib \
   -o HSC/cp/START-END \
   -p ${CP_PIPE_DIR}/pipelines/HSC/cpBias.yaml \
-  -d "instrument='HSC' AND exposure.observation_type='bias' AND NOT detector=9 AND day_obs >= START AND day_obs <= END" \
+  -d "instrument='HSC' AND exposure.observation_type='bias' AND NOT detector=9 AND NOT ( detector=21 AND day_obs > 20250425) AND NOT detector > 103 AND NOT　(detector=44 AND day_obs> 20261006) AND day_obs >= START AND day_obs <= END" \
   -c cpBiasIsr:doVignette=False \
   -j 32
 ```
