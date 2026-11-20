@@ -85,22 +85,49 @@ tasks:
 
   # ---------------------------------------------------------------------------
   # CONFIGURATION POINT: synthetic SSO catalog (sso_injection / SD-MOC)
-  # Population knobs: density, seed, model epoch, distance bins, mag/H, fuzz.
+  # Named populations are sampled and concatenated into one sso_injection_catalog.
   # ---------------------------------------------------------------------------
   generateSsoInjectionCatalog:
     class: sso_injection.GenerateSsoInjectionCatalogTask
     config:
       - connections.input_exposure: calexp
         connections.output_catalog: sso_injection_catalog
-        population.density: 10000
-        population.master_seed: 20240611
-        population.model_epoch_mjd: 60500.0
-        population.healpix_order: 8
-        # Uniform in r^2 between bounds (sky-rate weight; rate ~ r**(-1/2)).
-        population.distance_inner_au: 30.0
-        population.distance_outer_au: 50.0
-        population.n_distance_bins: 4
-        population.source_type: Trail
+        populations.centaur.density: 600
+        populations.centaur.master_seed: 20240611
+        populations.centaur.model_epoch_mjd: 59374.0
+        populations.centaur.healpix_order: 8
+        populations.centaur.distance_inner_au: 5.0
+        populations.centaur.distance_outer_au: 20.0
+        populations.centaur.n_distance_bins: 4
+        populations.centaur.mag_limits: [22.0, 27.0]
+        populations.centaur.h_limits: [5.0, 21.0]
+        populations.centaur.eccentricity_max: 0.8
+        populations.centaur.inclination_max_deg: 60.0
+        populations.centaur.source_type: Trail
+        populations.tno.density: 1200
+        populations.tno.master_seed: 20240611
+        populations.tno.model_epoch_mjd: 59374.0
+        populations.tno.healpix_order: 8
+        populations.tno.distance_inner_au: 30.0
+        populations.tno.distance_outer_au: 50.0
+        populations.tno.n_distance_bins: 6
+        populations.tno.mag_limits: [22.0, 27.0]
+        populations.tno.h_limits: [3.0, 13.0]
+        populations.tno.eccentricity_max: 0.5
+        populations.tno.inclination_max_deg: 30.0
+        populations.tno.source_type: Trail
+        populations.sdo.density: 600
+        populations.sdo.master_seed: 20240611
+        populations.sdo.model_epoch_mjd: 59374.0
+        populations.sdo.healpix_order: 8
+        populations.sdo.distance_inner_au: 60.0
+        populations.sdo.distance_outer_au: 80.0
+        populations.sdo.n_distance_bins: 2
+        populations.sdo.mag_limits: [22.0, 27.0]
+        populations.sdo.h_limits: [1.0, 10.0]
+        populations.sdo.eccentricity_max: 0.8
+        populations.sdo.inclination_max_deg: 60.0
+        populations.sdo.source_type: Trail
 
   # ---------------------------------------------------------------------------
   # CONFIGURATION POINT: inject Trails via stock GalSim (no SSO knowledge)
