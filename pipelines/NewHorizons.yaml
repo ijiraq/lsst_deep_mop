@@ -65,8 +65,9 @@ tasks:
     class: lsst.ip.isr.IsrTask
     config:
       - doDark: false
-        doAmpOffset: true
-        ampOffset.doApplyAmpOffset: true
+        doAmpOffset: false
+        ampOffset.doApplyAmpOffset: false
+        doNanMasking: false
 
   # ---------------------------------------------------------------------------
   # CONFIGURATION POINT: single-visit calibration (astrometry / photometry)
@@ -92,42 +93,64 @@ tasks:
     config:
       - connections.input_exposure: calexp
         connections.output_catalog: sso_injection_catalog
-        populations.centaur.density: 600
-        populations.centaur.master_seed: 20240611
-        populations.centaur.model_epoch_mjd: 59374.0
-        populations.centaur.healpix_order: 8
-        populations.centaur.distance_inner_au: 5.0
-        populations.centaur.distance_outer_au: 20.0
-        populations.centaur.n_distance_bins: 4
-        populations.centaur.mag_limits: [22.0, 27.0]
-        populations.centaur.h_limits: [5.0, 21.0]
-        populations.centaur.eccentricity_max: 0.8
-        populations.centaur.inclination_max_deg: 60.0
-        populations.centaur.source_type: Trail
-        populations.tno.density: 1200
-        populations.tno.master_seed: 20240611
-        populations.tno.model_epoch_mjd: 59374.0
-        populations.tno.healpix_order: 8
-        populations.tno.distance_inner_au: 30.0
-        populations.tno.distance_outer_au: 50.0
-        populations.tno.n_distance_bins: 6
-        populations.tno.mag_limits: [22.0, 27.0]
-        populations.tno.h_limits: [3.0, 13.0]
-        populations.tno.eccentricity_max: 0.5
-        populations.tno.inclination_max_deg: 30.0
-        populations.tno.source_type: Trail
-        populations.sdo.density: 600
-        populations.sdo.master_seed: 20240611
-        populations.sdo.model_epoch_mjd: 59374.0
-        populations.sdo.healpix_order: 8
-        populations.sdo.distance_inner_au: 60.0
-        populations.sdo.distance_outer_au: 80.0
-        populations.sdo.n_distance_bins: 2
-        populations.sdo.mag_limits: [22.0, 27.0]
-        populations.sdo.h_limits: [1.0, 10.0]
-        populations.sdo.eccentricity_max: 0.8
-        populations.sdo.inclination_max_deg: 60.0
-        populations.sdo.source_type: Trail
+    python: |
+        from sso_injection.config import OrbitPopulationConfig
+
+        config.populations['calib'] = OrbitPopulationConfig()
+        config.populations['calib'].density = 100
+        config.populations['calib'].master_seed = 20240611
+        config.populations['calib'].model_epoch_mjd = 59374.0
+        config.populations['calib'].healpix_order = 8
+        config.populations['calib'].distance_inner_au = 5.0
+        config.populations['calib'].distance_outer_au = 80.0
+        config.populations['calib'].n_distance_bins = 4
+        config.populations['calib'].mag_limits = [20.0, 21.0]
+        config.populations['calib'].h_limits = [4.0, 15.0]
+        config.populations['calib'].eccentricity_max = 0.01
+        config.populations['calib'].inclination_max_deg = 0.01
+        config.populations['calib'].source_type = "Trail"
+
+        config.populations['centaur'] = OrbitPopulationConfig()
+        config.populations['centaur'].density = 600
+        config.populations['centaur'].master_seed = 20240611
+        config.populations['centaur'].model_epoch_mjd = 59374.0
+        config.populations['centaur'].healpix_order = 8
+        config.populations['centaur'].distance_inner_au = 5.0
+        config.populations['centaur'].distance_outer_au = 20.0
+        config.populations['centaur'].n_distance_bins = 4
+        config.populations['centaur'].mag_limits = [23.0, 27.0]
+        config.populations['centaur'].h_limits = [5.0, 21.0]
+        config.populations['centaur'].eccentricity_max = 0.8
+        config.populations['centaur'].inclination_max_deg = 60.0
+        config.populations['centaur'].source_type = "Trail"
+
+        config.populations['tno'] = OrbitPopulationConfig()
+        config.populations['tno'].density = 1200
+        config.populations['tno'].master_seed = 20240611
+        config.populations['tno'].model_epoch_mjd = 59374.0
+        config.populations['tno'].healpix_order = 8
+        config.populations['tno'].distance_inner_au = 30.0
+        config.populations['tno'].distance_outer_au = 50.0
+        config.populations['tno'].n_distance_bins = 6
+        config.populations['tno'].mag_limits = [23.0, 27.0]
+        config.populations['tno'].h_limits = [3.0, 13.0]
+        config.populations['tno'].eccentricity_max = 0.5
+        config.populations['tno'].inclination_max_deg = 30.0
+        config.populations['tno'].source_type = "Trail"
+
+        config.populations['sdo'] = OrbitPopulationConfig()
+        config.populations['sdo'].density = 600
+        config.populations['sdo'].master_seed = 20240611
+        config.populations['sdo'].model_epoch_mjd = 59374.0
+        config.populations['sdo'].healpix_order = 8
+        config.populations['sdo'].distance_inner_au = 60.0
+        config.populations['sdo'].distance_outer_au = 80.0
+        config.populations['sdo'].n_distance_bins = 2
+        config.populations['sdo'].mag_limits = [23.0, 27.0]
+        config.populations['sdo'].h_limits = [1.0, 10.0]
+        config.populations['sdo'].eccentricity_max = 0.8
+        config.populations['sdo'].inclination_max_deg = 60.0
+        config.populations['sdo'].source_type = "Trail"
 
   # ---------------------------------------------------------------------------
   # CONFIGURATION POINT: inject Trails via stock GalSim (no SSO knowledge)

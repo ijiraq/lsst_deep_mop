@@ -11,7 +11,7 @@ from astropy.coordinates import SkyCoord
 from astropy.table import Table
 from lsst.afw.geom import SkyWcs
 from lsst.afw.image import VisitInfo
-from lsst.geom import Box2D, SpherePoint, degrees
+from lsst.geom import Box2D, Point2D
 
 from .config import OrbitPopulationConfig
 from .kepler import (
@@ -20,6 +20,9 @@ from .kepler import (
     kepToHelioCartSkyCoord,
     propagate_orbits,
 )
+
+# Keplerian provenance columns carried into the written injection catalog.
+_ORBIT_COLUMNS = ("a", "e", "inc", "Omega", "omega", "M", "H", "healpix", "dist_bin")
 
 
 def propagate_to_visit(
@@ -99,40 +102,62 @@ def orbits_to_trail_catalog(
     """
     Build a stock ``source_injection`` catalog (Trail or Star) for one detector.
 
-    Selects objects that fall inside ``bbox`` on ``wcs``.
+    Selects objects that fall inside ``bbox`` on ``wcs``. FOV-clipped rows also
+    carry the Keplerian provenance columns from ``orbits``.
     """
     sky = propagate_to_visit(orbits, visitInfo)
     if len(sky) == 0:
         return _empty_injection_table(config.source_type)
 
-    # Keep sources inside the detector bbox (with a small pad in pixels).
     pad = 50.0
     box = Box2D(bbox)
     box.grow(pad)
 
-    keep = []
-    xpix = []
-    ypix = []
-    for i, (ra, dec) in enumerate(zip(sky["ra"], sky["dec"], strict=True)):
+    center = Point2D(bbox.getCenter())
+    if pixel_scale_arcsec is None:
+        pixel_scale_arcsec = wcs.getPixelScale(center).asArcseconds()
+
+    # Coarse angular pre-cut so only nearby sources hit the WCS.
+    sky_center = wcs.pixelToSky(center)
+    ra0 = sky_center.getRa().asDegrees()
+    dec0 = sky_center.getDec().asDegrees()
+    radius_pix = 0.5 * float(np.hypot(bbox.getWidth(), bbox.getHeight())) + pad
+    radius_deg = (radius_pix * float(pixel_scale_arcsec)) / 3600.0
+    # Small margin for WCS distortion / flat-sky approximation.
+    radius_deg *= 1.25
+
+    ra = np.asarray(sky["ra"], dtype=float)
+    dec = np.asarray(sky["dec"], dtype=float)
+    cos_dec0 = np.cos(np.deg2rad(dec0))
+    sep2 = ((ra - ra0) * cos_dec0) ** 2 + (dec - dec0) ** 2
+    cand = sep2 <= radius_deg**2
+
+    keep = np.zeros(len(sky), dtype=bool)
+    if np.any(cand):
+        cand_idx = np.flatnonzero(cand)
         try:
-            pt = wcs.skyToPixel(SpherePoint(ra * degrees, dec * degrees))
-        except Exception:
-            keep.append(False)
-            xpix.append(np.nan)
-            ypix.append(np.nan)
-            continue
-        inside = box.contains(pt)
-        keep.append(bool(inside))
-        xpix.append(pt.x)
-        ypix.append(pt.y)
-    keep = np.asarray(keep, dtype=bool)
+            x, y = wcs.skyToPixelArray(ra[cand], dec[cand], degrees=True)
+        except TypeError:
+            # Older afw: skyToPixelArray expects radians.
+            x, y = wcs.skyToPixelArray(np.deg2rad(ra[cand]), np.deg2rad(dec[cand]))
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        inside = (
+            (x >= box.getMinX())
+            & (x <= box.getMaxX())
+            & (y >= box.getMinY())
+            & (y <= box.getMaxY())
+            & np.isfinite(x)
+            & np.isfinite(y)
+        )
+        keep[cand_idx[inside]] = True
+
     sky = sky[keep]
     if len(sky) == 0:
         return _empty_injection_table(config.source_type)
 
-    if pixel_scale_arcsec is None:
-        center = bbox.getCenter()
-        pixel_scale_arcsec = wcs.getPixelScale(center).asArcseconds()
+    # propagate_to_visit preserves row order, so the same mask applies to orbits.
+    orbits_kept = orbits[keep]
 
     exptime_s = visitInfo.getExposureTime()
     if config.trail_dt_hours is not None:
@@ -145,17 +170,19 @@ def orbits_to_trail_catalog(
     trail_length = np.maximum(trail_length, 1.0)
 
     source_type = config.source_type
-    table = Table(
-        {
-            "injection_id": sky["injection_id"],
-            "ra": sky["ra"],
-            "dec": sky["dec"],
-            "source_type": np.full(len(sky), source_type),
-            "mag": sky["mag"],
-            "trail_length": trail_length,
-            "beta": sky["angle"],
-        }
-    )
+    data = {
+        "injection_id": sky["injection_id"],
+        "ra": sky["ra"],
+        "dec": sky["dec"],
+        "source_type": np.full(len(sky), source_type),
+        "mag": sky["mag"],
+        "trail_length": trail_length,
+        "beta": sky["angle"],
+    }
+    for col in _ORBIT_COLUMNS:
+        data[col] = np.asarray(orbits_kept[col])
+
+    table = Table(data)
     if source_type != "Trail":
         table.remove_column("trail_length")
         table.remove_column("beta")
@@ -169,6 +196,15 @@ def _empty_injection_table(source_type: str) -> Table:
         "dec": np.array([], dtype=float),
         "source_type": np.array([], dtype=str),
         "mag": np.array([], dtype=float),
+        "a": np.array([], dtype=float),
+        "e": np.array([], dtype=float),
+        "inc": np.array([], dtype=float),
+        "Omega": np.array([], dtype=float),
+        "omega": np.array([], dtype=float),
+        "M": np.array([], dtype=float),
+        "H": np.array([], dtype=float),
+        "healpix": np.array([], dtype=np.int64),
+        "dist_bin": np.array([], dtype=np.int32),
     }
     if source_type == "Trail":
         cols["trail_length"] = np.array([], dtype=float)

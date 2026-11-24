@@ -6,61 +6,23 @@ from __future__ import annotations
 __all__ = ["sample_sdmoc_cell", "sample_sdmoc_cells"]
 
 import numpy as np
-from astropy import units as u
-from astropy.coordinates import SkyCoord
-from astropy.table import Table, vstack
+from astropy.table import Table
 from astropy.time import Time
 
 from .config import OrbitPopulationConfig
 from .kepler import GM_SUN_AU3_DAY2, cartesian_to_keplerian, true_anomaly_from_mean
 from .sdmoc import SDMocCell, SDMocIndex
 
-
-def _sample_directions(index: SDMocIndex, ipix: int, n: int, rng: np.random.Generator) -> SkyCoord:
-    """Uniform-ish directions inside a nested HEALPix pixel."""
+try:
     import healpy as hp
+except ImportError as exc:  # pragma: no cover
+    raise ImportError("sso_injection requires healpy for SD-MOC sampling") from exc
 
-    lon = np.empty(n)
-    lat = np.empty(n)
-    filled = 0
-    while filled < n:
-        vecs = rng.normal(size=(3, max(n * 8, 32)))
-        vecs /= np.linalg.norm(vecs, axis=0)
-        pix = hp.vec2pix(index.nside, vecs[0], vecs[1], vecs[2], nest=True)
-        hit = np.where(pix == ipix)[0]
-        if hit.size == 0:
-            continue
-        take = min(int(hit.size), n - filled)
-        theta, phi = hp.vec2ang(vecs[:, hit[:take]].T)
-        lon[filled : filled + take] = np.rad2deg(phi)
-        lat[filled : filled + take] = 90.0 - np.rad2deg(theta)
-        filled += take
-    obstime = Time(index.config.model_epoch_mjd, format="mjd")
-    return SkyCoord(
-        lon=lon * u.deg,
-        lat=lat * u.deg,
-        frame="heliocentrictrueecliptic",
-        obstime=obstime,
-    )
+# Nested HEALPix order for equal-area sub-pixel directions (~0.39 mas at order 29).
+_DIRECTION_ORDER = 29
 
-
-def _random_unit_perp(rhat: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-    """Random unit vectors perpendicular to ``rhat`` (shape (3, N))."""
-    tmp = rng.normal(size=rhat.shape)
-    v = tmp - rhat * np.sum(tmp * rhat, axis=0, keepdims=True)
-    norm = np.linalg.norm(v, axis=0)
-    bad = norm < 1e-12
-    if np.any(bad):
-        # Rare: tmp nearly parallel to rhat; use a coordinate-axis fallback.
-        fallback = np.zeros_like(rhat)
-        abs_r = np.abs(rhat)
-        min_ax = np.argmin(abs_r, axis=0)
-        fallback[min_ax, np.arange(rhat.shape[1])] = 1.0
-        v[:, bad] = fallback[:, bad] - rhat[:, bad] * np.sum(
-            fallback[:, bad] * rhat[:, bad], axis=0, keepdims=True
-        )
-        norm = np.linalg.norm(v, axis=0)
-    return v / norm
+# Uniform draws per object: r^2, sub-pixel direction, e, M, plane angle, H.
+_N_UNIFORMS = 6
 
 
 def sample_sdmoc_cell(
@@ -77,94 +39,7 @@ def sample_sdmoc_cell(
     orientation is random among planes containing the position, subject to
     ``inclination_max_deg``.
     """
-    config = config or index.config
-    n = index.n_objects_per_cell(cell.dist_bin)
-    if n <= 0:
-        return Table()
-
-    rng = np.random.default_rng(index.cell_seed(cell))
-    r_lo = index.distance_edges[cell.dist_bin]
-    r_hi = index.distance_edges[cell.dist_bin + 1]
-    # Uniform in r^2 within the shell (sky-rate weighting; rate ~ r**(-1/2)).
-    r = np.sqrt(rng.uniform(r_lo**2, r_hi**2, size=n))
-
-    directions = _sample_directions(index, cell.ipix, n, rng)
-    lon = directions.lon.to_value(u.rad)
-    lat = directions.lat.to_value(u.rad)
-    x = r * np.cos(lat) * np.cos(lon)
-    y = r * np.cos(lat) * np.sin(lon)
-    z = r * np.sin(lat)
-    xyz = np.vstack([x, y, z])
-    rhat = xyz / r
-
-    # Orbital elements priors. M must be drawn explicitly — a purely tangential
-    # speed with |v|<v_circ forces apoapsis and collapses M to ~180 deg.
-    e = rng.uniform(0.0, config.eccentricity_max, size=n)
-    M = rng.uniform(0.0, 2.0 * np.pi, size=n)
-    nu = true_anomaly_from_mean(e, M)
-    one_minus_e2 = np.maximum(1.0 - e**2, 1e-12)
-    a = r * (1.0 + e * np.cos(nu)) / one_minus_e2
-    p = a * one_minus_e2  # semi-latus rectum
-    mu = GM_SUN_AU3_DAY2
-    # Polar velocity components (AU/day) in the {rhat, theta_hat} basis.
-    vr = np.sqrt(mu / p) * e * np.sin(nu)
-    vt = np.sqrt(mu / p) * (1.0 + e * np.cos(nu))
-
-    # Random orbital planes containing r, rejecting i above the configured max.
-    i_max = np.deg2rad(config.inclination_max_deg)
-    theta_hat = np.empty_like(rhat)
-    pending = np.ones(n, dtype=bool)
-    for _ in range(64):
-        if not np.any(pending):
-            break
-        n_pend = int(pending.sum())
-        rhat_p = rhat[:, pending]
-        th = _random_unit_perp(rhat_p, rng)
-        nhat = np.cross(rhat_p, th, axis=0)
-        nhat /= np.linalg.norm(nhat, axis=0)
-        inc_p = np.arccos(np.clip(nhat[2], -1.0, 1.0))
-        ok = inc_p <= i_max
-        # Write accepted theta_hat; leave rejects for another draw.
-        idxs = np.flatnonzero(pending)
-        theta_hat[:, idxs[ok]] = th[:, ok]
-        pending[idxs[ok]] = False
-    if np.any(pending):
-        # Fallback: accept whatever plane we get for stubborn leftovers.
-        th = _random_unit_perp(rhat[:, pending], rng)
-        theta_hat[:, pending] = th
-
-    v_day = vr * rhat + vt * theta_hat
-    vxyz_year = v_day * 365.25
-
-    # Convert the constructed state; M should track the drawn mean anomaly
-    # (not collapse to apoapsis as with a purely tangential |v|<v_circ prior).
-    elements = cartesian_to_keplerian(xyz, vxyz_year)
-
-    h = rng.uniform(config.h_limits[0], config.h_limits[1], size=n)
-    local_index = np.arange(n, dtype=np.int64)
-    injection_id = (np.int64(index.cell_seed(cell)) & 0xFFFFF) * np.int64(10**6) + local_index
-
-    obstime = Time(config.model_epoch_mjd, format="mjd")
-    table = Table(
-        {
-            "injection_id": injection_id,
-            "a": elements["a"],
-            "e": elements["e"],
-            "inc": elements["inc"],
-            "Omega": elements["Omega"],
-            "omega": elements["omega"],
-            "M": elements["M"],
-            "H": h,
-            "healpix": np.full(n, cell.ipix, dtype=np.int64),
-            "dist_bin": np.full(n, cell.dist_bin, dtype=np.int32),
-        },
-        meta={
-            "day_obs": obstime.isot,
-            "model_epoch_mjd": config.model_epoch_mjd,
-            "master_seed": config.master_seed,
-        },
-    )
-    return table
+    return sample_sdmoc_cells([cell], index, config=config)
 
 
 def sample_sdmoc_cells(
@@ -172,9 +47,139 @@ def sample_sdmoc_cells(
     index: SDMocIndex,
     config: OrbitPopulationConfig | None = None,
 ) -> Table:
-    """Sample and stack orbit tables for many SD-MOC cells."""
-    tables = [sample_sdmoc_cell(cell, index, config=config) for cell in cells]
-    tables = [t for t in tables if len(t) > 0]
-    if not tables:
+    """
+    Sample and stack orbit tables for many SD-MOC cells.
+
+    Each cell is seeded independently via ``index.cell_seed(cell)`` so a cell's
+    orbits are identical whether sampled alone or inside a larger batch. Uniform
+    draws are a fixed ``(6, n)`` block per cell (no rejection sampling).
+    """
+    config = config or index.config
+    if not cells:
         return Table()
-    return vstack(tables, metadata_conflicts="silent")
+
+    ipix_all = np.fromiter((c.ipix for c in cells), dtype=np.int64, count=len(cells))
+    dist_bin_all = np.fromiter((c.dist_bin for c in cells), dtype=np.int64, count=len(cells))
+
+    shift = _DIRECTION_ORDER - index.order
+    if shift < 0:
+        raise ValueError(
+            f"healpix_order={index.order} exceeds direction order {_DIRECTION_ORDER}"
+        )
+    n_sub = np.int64(4**shift)
+    nside_fine = 2**_DIRECTION_ORDER
+    i_max = np.deg2rad(config.inclination_max_deg)
+    mu = GM_SUN_AU3_DAY2
+    h_lo = float(config.h_limits[0])
+    h_hi = float(config.h_limits[1])
+    e_max = float(config.eccentricity_max)
+
+    chunks: list[dict[str, np.ndarray]] = []
+
+    for dist_bin in range(index.n_dist_bins):
+        n = index.n_objects_per_cell(dist_bin)
+        sel = np.flatnonzero(dist_bin_all == dist_bin)
+        if n <= 0 or sel.size == 0:
+            continue
+
+        n_cells = int(sel.size)
+        # Per-cell seeded uniforms; row order is fixed for reproducibility.
+        u = np.empty((n_cells, _N_UNIFORMS, n), dtype=float)
+        seeds = np.empty(n_cells, dtype=np.int64)
+        for k, j in enumerate(sel):
+            seed = index.cell_seed(cells[j])
+            seeds[k] = seed
+            u[k] = np.random.default_rng(seed).random((_N_UNIFORMS, n))
+
+        # Shape (_N_UNIFORMS, n_cells * n): objects contiguous per cell.
+        u = u.transpose(1, 0, 2).reshape(_N_UNIFORMS, -1)
+        ipix = np.repeat(ipix_all[sel], n)
+        injection_id = (
+            (seeds[:, None] & 0xFFFFF).astype(np.int64) * np.int64(10**6)
+            + np.arange(n, dtype=np.int64)
+        ).reshape(-1)
+
+        r_lo = float(index.distance_edges[dist_bin])
+        r_hi = float(index.distance_edges[dist_bin + 1])
+        r = np.sqrt(r_lo**2 + u[0] * (r_hi**2 - r_lo**2))
+
+        sub = np.minimum((u[1] * float(n_sub)).astype(np.int64), n_sub - 1)
+        theta, phi = hp.pix2ang(nside_fine, ipix * n_sub + sub, nest=True)
+        lat = 0.5 * np.pi - theta
+        cos_lat = np.cos(lat)
+        sin_lat = np.sin(lat)
+        cos_lon = np.cos(phi)
+        sin_lon = np.sin(phi)
+
+        rhat = np.vstack(
+            [
+                cos_lat * cos_lon,
+                cos_lat * sin_lon,
+                sin_lat,
+            ]
+        )
+        xyz = r * rhat
+
+        e = u[2] * e_max
+        M = u[3] * (2.0 * np.pi)
+        nu = true_anomaly_from_mean(e, M)
+        # Semi-latus rectum from r and true anomaly: p = r (1 + e cos ν).
+        p = r * (1.0 + e * np.cos(nu))
+        vr = np.sqrt(mu / p) * e * np.sin(nu)
+        vt = np.sqrt(mu / p) * (1.0 + e * np.cos(nu))
+
+        # Local tangent basis: east (increasing lon), north (increasing lat).
+        east = np.vstack([-sin_lon, cos_lon, np.zeros_like(phi)])
+        north = np.cross(rhat, east, axis=0)
+
+        # Closed-form plane angle with cos(i) = cos(ψ) cos(lat).
+        with np.errstate(invalid="ignore", divide="ignore"):
+            ratio = np.cos(i_max) / cos_lat
+        psi_max = np.arccos(np.clip(ratio, -1.0, 1.0))
+        psi_max = np.where(np.isfinite(psi_max), psi_max, 0.0)
+        psi = (2.0 * u[4] - 1.0) * psi_max
+        theta_hat = np.cos(psi) * east + np.sin(psi) * north
+
+        vxyz_year = (vr * rhat + vt * theta_hat) * 365.25
+        elements = cartesian_to_keplerian(xyz, vxyz_year)
+        h = h_lo + u[5] * (h_hi - h_lo)
+
+        chunks.append(
+            {
+                "injection_id": injection_id,
+                "a": elements["a"],
+                "e": elements["e"],
+                "inc": elements["inc"],
+                "Omega": elements["Omega"],
+                "omega": elements["omega"],
+                "M": elements["M"],
+                "H": h,
+                "healpix": ipix.astype(np.int64, copy=False),
+                "dist_bin": np.full(ipix.size, dist_bin, dtype=np.int32),
+            }
+        )
+
+    if not chunks:
+        return Table()
+
+    obstime = Time(config.model_epoch_mjd, format="mjd")
+    keys = (
+        "injection_id",
+        "a",
+        "e",
+        "inc",
+        "Omega",
+        "omega",
+        "M",
+        "H",
+        "healpix",
+        "dist_bin",
+    )
+    return Table(
+        {key: np.concatenate([c[key] for c in chunks]) for key in keys},
+        meta={
+            "day_obs": obstime.isot,
+            "model_epoch_mjd": config.model_epoch_mjd,
+            "master_seed": config.master_seed,
+        },
+    )

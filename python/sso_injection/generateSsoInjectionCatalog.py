@@ -13,6 +13,7 @@ import hashlib
 
 import numpy as np
 from astropy.table import Table, vstack
+from lsst.geom import Point2D
 from lsst.pex.config import ConfigDictField, ConfigField
 from lsst.pipe.base import PipelineTask, PipelineTaskConfig, PipelineTaskConnections, Struct
 from lsst.pipe.base.connectionTypes import Input, Output
@@ -99,7 +100,7 @@ class GenerateSsoInjectionCatalogTask(PipelineTask):
         ras = []
         decs = []
         for corner in corners:
-            sp = wcs.pixelToSky(corner)
+            sp = wcs.pixelToSky(Point2D(corner))
             ras.append(sp.getRa().asDegrees())
             decs.append(sp.getDec().asDegrees())
         ras = np.asarray(ras + ras[:1], dtype=float)
