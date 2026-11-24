@@ -3,7 +3,12 @@
 
 from __future__ import annotations
 
-__all__ = ["propagate_to_visit", "orbits_to_trail_catalog"]
+__all__ = [
+    "propagate_to_visit",
+    "orbits_to_trail_catalog",
+    "apply_catalog_units",
+    "CATALOG_COLUMN_UNITS",
+]
 
 import numpy as np
 from astropy import units as u
@@ -24,6 +29,41 @@ from .kepler import (
 # Keplerian provenance columns carried into the written injection catalog.
 _ORBIT_COLUMNS = ("a", "e", "inc", "Omega", "omega", "M", "H", "healpix", "dist_bin")
 
+# Astropy units attached to written catalog columns (None ⇒ dimensionless / no unit).
+# Angular orbital elements are stored in radians (see cartesian_to_keplerian).
+CATALOG_COLUMN_UNITS: dict[str, u.Unit | None] = {
+    "injection_id": None,
+    "population": None,
+    "ra": u.deg,
+    "dec": u.deg,
+    "dra": u.arcsec / u.hour,
+    "ddec": u.arcsec / u.hour,
+    "rate": u.arcsec / u.hour,
+    "source_type": None,
+    "mag": u.mag,
+    "trail_length": u.pix,
+    "beta": u.deg,
+    "a": u.au,
+    "e": None,
+    "inc": u.rad,
+    "Omega": u.rad,
+    "omega": u.rad,
+    "M": u.rad,
+    "H": u.mag,
+    "r": u.au,
+    "delta": u.au,
+    "healpix": None,
+    "dist_bin": None,
+}
+
+
+def apply_catalog_units(table: Table) -> Table:
+    """Attach ``CATALOG_COLUMN_UNITS`` to columns present on ``table`` (in place)."""
+    for name, unit in CATALOG_COLUMN_UNITS.items():
+        if name in table.colnames and unit is not None:
+            table[name].unit = unit
+    return table
+
 
 def propagate_to_visit(
     orbits: Table,
@@ -33,11 +73,24 @@ def propagate_to_visit(
     """
     Propagate Keplerian orbits to the visit epoch and compute sky rates.
 
-    Returns a table with ra, dec, mag, rate (arcsec/hour), angle (degree).
+    Returns a table with ra, dec, mag, rate, dra, ddec (arcsec/hour), angle
+    (degree), heliocentric ``r`` and observer-centric ``delta`` (AU).
     """
     if len(orbits) == 0:
         return Table(
-            names=("injection_id", "ra", "dec", "mag", "rate", "angle", "r", "delta", "H"),
+            names=(
+                "injection_id",
+                "ra",
+                "dec",
+                "mag",
+                "rate",
+                "dra",
+                "ddec",
+                "angle",
+                "r",
+                "delta",
+                "H",
+            ),
         )
 
     dt = rate_dt
@@ -74,13 +127,21 @@ def propagate_to_visit(
     delta = coordinates.distance.to_value(u.au)
     mag = apparent_magnitude(np.asarray(r_helio), np.asarray(delta), 1.0, np.asarray(orbits_t["H"]))
 
+    # On-sky rate components: PA is East of North.
+    rate_asph = rate.to_value(u.arcsec / u.hour)
+    pa_rad = position_angle.to_value(u.rad)
+    dra = rate_asph * np.sin(pa_rad)
+    ddec = rate_asph * np.cos(pa_rad)
+
     out = Table(
         {
             "injection_id": orbits_t["injection_id"],
             "ra": coordinates.ra.to_value(u.deg),
             "dec": coordinates.dec.to_value(u.deg),
             "mag": np.asarray(mag, dtype=float),
-            "rate": rate.to_value(u.arcsec / u.hour),
+            "rate": rate_asph,
+            "dra": np.asarray(dra, dtype=float),
+            "ddec": np.asarray(ddec, dtype=float),
             "angle": position_angle.to_value(u.deg),
             "r": np.asarray(r_helio, dtype=float),
             "delta": np.asarray(delta, dtype=float),
@@ -103,7 +164,7 @@ def orbits_to_trail_catalog(
     Build a stock ``source_injection`` catalog (Trail or Star) for one detector.
 
     Selects objects that fall inside ``bbox`` on ``wcs``. FOV-clipped rows also
-    carry the Keplerian provenance columns from ``orbits``.
+    carry Keplerian provenance, on-sky rates, and observer distance.
     """
     sky = propagate_to_visit(orbits, visitInfo)
     if len(sky) == 0:
@@ -165,19 +226,24 @@ def orbits_to_trail_catalog(
     else:
         hours = float(exptime_s) / 3600.0 if exptime_s and exptime_s > 0 else 1.0 / 60.0
 
-    # trail_length in pixels: (arcsec/hour * hours) / (arcsec/pixel)
+    # Physical trail length in pixels; slow movers are often sub-pixel (do not floor to 1).
     trail_length = (np.asarray(sky["rate"], dtype=float) * hours) / float(pixel_scale_arcsec)
-    trail_length = np.maximum(trail_length, 1.0)
+    trail_length = np.maximum(trail_length, 0.0)
 
     source_type = config.source_type
     data = {
         "injection_id": sky["injection_id"],
         "ra": sky["ra"],
         "dec": sky["dec"],
+        "dra": sky["dra"],
+        "ddec": sky["ddec"],
+        "rate": sky["rate"],
         "source_type": np.full(len(sky), source_type),
         "mag": sky["mag"],
         "trail_length": trail_length,
         "beta": sky["angle"],
+        "r": sky["r"],
+        "delta": sky["delta"],
     }
     for col in _ORBIT_COLUMNS:
         data[col] = np.asarray(orbits_kept[col])
@@ -186,14 +252,18 @@ def orbits_to_trail_catalog(
     if source_type != "Trail":
         table.remove_column("trail_length")
         table.remove_column("beta")
-    return table
+    return apply_catalog_units(table)
 
 
 def _empty_injection_table(source_type: str) -> Table:
     cols = {
         "injection_id": np.array([], dtype=np.int64),
+        "population": np.array([], dtype=str),
         "ra": np.array([], dtype=float),
         "dec": np.array([], dtype=float),
+        "dra": np.array([], dtype=float),
+        "ddec": np.array([], dtype=float),
+        "rate": np.array([], dtype=float),
         "source_type": np.array([], dtype=str),
         "mag": np.array([], dtype=float),
         "a": np.array([], dtype=float),
@@ -203,10 +273,12 @@ def _empty_injection_table(source_type: str) -> Table:
         "omega": np.array([], dtype=float),
         "M": np.array([], dtype=float),
         "H": np.array([], dtype=float),
+        "r": np.array([], dtype=float),
+        "delta": np.array([], dtype=float),
         "healpix": np.array([], dtype=np.int64),
         "dist_bin": np.array([], dtype=np.int32),
     }
     if source_type == "Trail":
         cols["trail_length"] = np.array([], dtype=float)
         cols["beta"] = np.array([], dtype=float)
-    return Table(cols)
+    return apply_catalog_units(Table(cols))

@@ -7,13 +7,19 @@ import unittest
 from unittest import mock
 
 import numpy as np
+from astropy import units as u
 from astropy.table import Table
 
 try:
     from lsst.geom import Point2D
 
     from sso_injection.config import OrbitPopulationConfig
-    from sso_injection.trails import _ORBIT_COLUMNS, _empty_injection_table, orbits_to_trail_catalog
+    from sso_injection.trails import (
+        CATALOG_COLUMN_UNITS,
+        _ORBIT_COLUMNS,
+        _empty_injection_table,
+        orbits_to_trail_catalog,
+    )
 
     _HAVE_LSST = True
 except ImportError:  # pragma: no cover - local env without Science Pipelines
@@ -26,8 +32,25 @@ class TrailsCatalogTestCase(unittest.TestCase):
         table = _empty_injection_table("Trail")
         for col in _ORBIT_COLUMNS:
             self.assertIn(col, table.colnames)
-        for col in ("injection_id", "ra", "dec", "source_type", "mag", "trail_length", "beta"):
+        for col in (
+            "injection_id",
+            "population",
+            "ra",
+            "dec",
+            "dra",
+            "ddec",
+            "rate",
+            "delta",
+            "r",
+            "source_type",
+            "mag",
+            "trail_length",
+            "beta",
+        ):
             self.assertIn(col, table.colnames)
+        self.assertEqual(table["inc"].unit, u.rad)
+        self.assertEqual(table["dra"].unit, u.arcsec / u.hour)
+        self.assertEqual(table["delta"].unit, u.au)
 
     def test_fov_catalog_retains_orbit_columns(self):
         n = 5
@@ -45,13 +68,16 @@ class TrailsCatalogTestCase(unittest.TestCase):
                 "dist_bin": np.zeros(n, dtype=np.int32),
             }
         )
+        # rate=0.5 "/hr, 300 s, 0.168 "/pix → trail_length ≈ 0.248 (must not floor to 1).
         sky = Table(
             {
                 "injection_id": orbits["injection_id"],
                 "ra": np.array([10.0, 10.01, 50.0, 10.02, 80.0]),
                 "dec": np.array([0.0, 0.01, 40.0, -0.01, -50.0]),
                 "mag": np.full(n, 24.0),
-                "rate": np.full(n, 3.0),
+                "rate": np.full(n, 0.5),
+                "dra": np.full(n, 0.3),
+                "ddec": np.full(n, 0.4),
                 "angle": np.full(n, 45.0),
                 "r": np.full(n, 40.0),
                 "delta": np.full(n, 39.0),
@@ -100,7 +126,6 @@ class TrailsCatalogTestCase(unittest.TestCase):
             def getHeight(self):
                 return 200.0
 
-            # Box2D construction from a real Box2I is not available; patch Box2D.
             def __iter__(self):
                 return iter(())
 
@@ -136,8 +161,14 @@ class TrailsCatalogTestCase(unittest.TestCase):
         self.assertLess(len(catalog), n)
         for col in _ORBIT_COLUMNS:
             self.assertIn(col, catalog.colnames)
-        for col in ("injection_id", "ra", "dec", "source_type", "mag", "trail_length", "beta"):
+        for col in ("dra", "ddec", "rate", "delta", "r", "trail_length", "beta"):
             self.assertIn(col, catalog.colnames)
+        expected_trail = 0.5 * (300.0 / 3600.0) / 0.168
+        np.testing.assert_allclose(catalog["trail_length"], expected_trail, rtol=1e-6)
+        self.assertTrue(np.all(np.asarray(catalog["trail_length"]) < 1.0))
+        self.assertEqual(catalog["inc"].unit, CATALOG_COLUMN_UNITS["inc"])
+        self.assertEqual(catalog["dra"].unit, CATALOG_COLUMN_UNITS["dra"])
+        np.testing.assert_array_equal(catalog["delta"], 39.0)
         # Surviving rows keep the orbit values from the input table.
         for iid, a in zip(catalog["injection_id"], catalog["a"], strict=True):
             self.assertEqual(float(a), 40.0)

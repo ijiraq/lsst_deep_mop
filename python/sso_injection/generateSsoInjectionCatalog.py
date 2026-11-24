@@ -21,7 +21,7 @@ from lsst.pipe.base.connectionTypes import Input, Output
 from .config import OrbitPopulationConfig
 from .sample import sample_sdmoc_cells
 from .sdmoc import SDMocIndex
-from .trails import _empty_injection_table, orbits_to_trail_catalog
+from .trails import apply_catalog_units, _empty_injection_table, orbits_to_trail_catalog
 
 
 def _mix_population_seed(master_seed: int, population_name: str) -> int:
@@ -31,6 +31,50 @@ def _mix_population_seed(master_seed: int, population_name: str) -> int:
         digest_size=8,
     ).digest()
     return int.from_bytes(digest, "little") & 0x7FFFFFFF
+
+
+def _population_meta(name: str, base_config: OrbitPopulationConfig, mixed_seed: int) -> dict:
+    """JSON-friendly per-population provenance for the written catalog."""
+    edges = [float(x) for x in base_config.resolve_distance_edges()]
+    return {
+        "name": name,
+        "master_seed": int(base_config.master_seed),
+        "mixed_seed": int(mixed_seed),
+        "model_epoch_mjd": float(base_config.model_epoch_mjd),
+        "density": float(base_config.density),
+        "healpix_order": int(base_config.healpix_order),
+        "distance_inner_au": float(base_config.distance_inner_au),
+        "distance_outer_au": float(base_config.distance_outer_au),
+        "n_distance_bins": int(base_config.n_distance_bins),
+        "distance_bin_edges_au": edges,
+        "mag_limits": [float(x) for x in base_config.mag_limits],
+        "h_limits": [float(x) for x in base_config.h_limits],
+        "eccentricity_max": float(base_config.eccentricity_max),
+        "inclination_max_deg": float(base_config.inclination_max_deg),
+        "eccentricity_fuzz": float(base_config.eccentricity_fuzz),
+        "inclination_fuzz_deg": float(base_config.inclination_fuzz_deg),
+        "source_type": str(base_config.source_type),
+        "trail_dt_hours": (
+            None if base_config.trail_dt_hours is None else float(base_config.trail_dt_hours)
+        ),
+    }
+
+
+def _catalog_meta(visitInfo, populations_meta: list[dict]) -> dict:
+    """File-level metadata stored with the Arrow/parquet injection catalog."""
+    obstime = visitInfo.date.toAstropy()
+    epochs = sorted({float(p["model_epoch_mjd"]) for p in populations_meta})
+    return {
+        "visit_mjd": float(obstime.mjd),
+        "visit_isot": str(obstime.isot),
+        "exposure_time_s": float(visitInfo.getExposureTime() or 0.0),
+        # Element epoch(s) at which SD-MOC ownership / sampling is defined.
+        "model_epoch_mjd": epochs[0] if len(epochs) == 1 else epochs,
+        "element_angle_unit": "rad",
+        "rate_unit": "arcsec / h",
+        "distance_unit": "AU",
+        "populations": populations_meta,
+    }
 
 
 class GenerateSsoInjectionCatalogConnections(
@@ -112,10 +156,12 @@ class GenerateSsoInjectionCatalogTask(PipelineTask):
         populations = self._resolve_populations()
         tables: list[Table] = []
         source_types: set[str] = set()
+        populations_meta: list[dict] = []
 
         for name, base_config in populations:
             config = base_config.copy()
             config.master_seed = _mix_population_seed(base_config.master_seed, name)
+            populations_meta.append(_population_meta(name, base_config, config.master_seed))
 
             index = SDMocIndex(config)
             cells = index.cells_for_visit(ras, decs, visitInfo=visitInfo)
@@ -143,6 +189,9 @@ class GenerateSsoInjectionCatalogTask(PipelineTask):
                 bbox,
                 config,
             )
+            if len(catalog) > 0:
+                # Orbit-model key from config.populations (e.g. "tno", "centaur").
+                catalog["population"] = np.full(len(catalog), str(name))
             self.log.info(
                 "Population %s: %d injectable sources (%s)",
                 name,
@@ -153,6 +202,8 @@ class GenerateSsoInjectionCatalogTask(PipelineTask):
                 source_types.add(str(config.source_type))
                 tables.append(catalog)
 
+        file_meta = _catalog_meta(visitInfo, populations_meta)
+
         if len(source_types) > 1:
             raise ValueError(
                 "All populations must share the same source_type when concatenating; "
@@ -161,6 +212,7 @@ class GenerateSsoInjectionCatalogTask(PipelineTask):
 
         if not tables:
             catalog = _empty_injection_table(populations[0][1].source_type)
+            catalog.meta.update(file_meta)
             self.log.info(
                 "Wrote 0 injectable sources across %d population(s)",
                 len(populations),
@@ -168,6 +220,8 @@ class GenerateSsoInjectionCatalogTask(PipelineTask):
             return Struct(output_catalog=catalog)
 
         catalog = vstack(tables, metadata_conflicts="silent")
+        apply_catalog_units(catalog)
+        catalog.meta.update(file_meta)
         self.log.info(
             "Wrote %d injectable sources from %d population(s) (%s)",
             len(catalog),

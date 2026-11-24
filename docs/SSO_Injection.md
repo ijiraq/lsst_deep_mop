@@ -96,17 +96,30 @@ No `fakes/{day_obs}` collection is required.
 
 ### Columns in `sso_injection_catalog` (Trail)
 
+Columns carry Astropy units (preserved by the `ArrowAstropy` butler storage class).
+
 | Column | Unit / notes |
 |--------|----------------|
 | `injection_id` | Stable id within the cell seed |
-| `ra`, `dec` | ICRS degrees at visit epoch |
+| `population` | Orbit-model key from `config.populations` (e.g. `tno`) |
+| `ra`, `dec` | ICRS at visit epoch (`deg`) |
+| `dra`, `ddec` | On-sky rate components (`arcsec / h`); PA East of North |
+| `rate` | Total on-sky rate (`arcsec / h`) |
 | `source_type` | `Trail` (default) or `Star` |
 | `mag` | Apparent magnitude (Bowell H-G) |
-| `trail_length` | Pixels over the exposure (or `trail_dt_hours`) |
-| `beta` | Trail position angle (degrees) |
+| `trail_length` | Physical trail over the exposure in pixels (may be sub-pixel) |
+| `beta` | Trail position angle (`deg`) |
+| `a` | Semi-major axis (`AU`) |
+| `e` | Eccentricity (dimensionless) |
+| `inc`, `Omega`, `omega`, `M` | Keplerian angles (`rad`) at model epoch |
+| `H` | Absolute magnitude |
+| `r` | Heliocentric distance at visit (`AU`) |
+| `delta` | Observer–object distance at visit (`AU`) |
+| `healpix`, `dist_bin` | SD-MOC ownership cell |
 
-Internal orbit tables (before FOV clip) also carry Keplerian elements
-`a`, `e`, `inc`, `Omega`, `omega`, `M`, plus `H`, `healpix`, `dist_bin`.
+Table metadata (parquet / Arrow) includes `visit_mjd`, `visit_isot`,
+`exposure_time_s`, `model_epoch_mjd` (element epoch), and a `populations`
+list with per-population `master_seed`, `mixed_seed`, density, and shell grid.
 
 Inspect after a run:
 
