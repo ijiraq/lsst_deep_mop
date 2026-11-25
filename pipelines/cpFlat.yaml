@@ -1,0 +1,11 @@
+description: obs_subaru/HSC flat calibration construction
+instrument: lsst.obs.subaru.HyperSuprimeCam
+imports:
+  - location: resource://lsst.cp.pipe/resources/pipelines/HSC/cpFlat.yaml
+tasks:
+  cpFlatIsr:
+    config: 
+      - doBias: true
+        doDark: false
+        doFringe: false
+
