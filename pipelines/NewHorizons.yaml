@@ -32,6 +32,7 @@ instrument: lsst.obs.subaru.HyperSuprimeCam
 parameters:
   # --- ISR / calibration ---
   do_dark: false
+  do_fringe: false
 
   # --- Astrometry (calibrateImage) ---
   # Tighten or loosen if visit solutions fail or are too slow.
