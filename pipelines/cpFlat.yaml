@@ -4,6 +4,7 @@ imports:
   - location: resource://lsst.cp.pipe/resources/pipelines/HSC/cpFlat.yaml
 tasks:
   cpFlatIsr:
+    class: lsst.ip.isr.IsrTask
     config: 
       - doBias: true
         doDark: false
