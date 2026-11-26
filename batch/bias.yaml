@@ -1,0 +1,51 @@
+# WMS plugin + warm-pool settings (or: includeConfigs: [examples/canfar_site.yaml])
+wmsServiceClass: lsst.ctrl.bps.canfar.CanfarService
+computeSite: canfar
+bpsUseShared: true
+
+pipelineYaml: "${PIPE_DIR}/cpBias.yaml"
+
+project: NewHorizons
+campaign: 2021
+
+# Queue + logs must live on /arc so headless workers can see them.
+submitPath: /arc/projects/NewHorizons/bps/{operator}/{campaign}/{payloadName}/{timestamp}
+
+# Per-quantum resources (tune once you see real memory use).
+requestCpus: 1
+requestMemory: 4096
+
+payload:
+  payloadName: bias
+  butlerConfig: ${BUTLER_DIR}
+  inCollection: HSC/raw/all,HSC/calib
+  # Same as pipetask -o (BPS would otherwise use u/{operator}/{payloadName}).
+  output: HSC/calib/bias/{campaign}
+  dataQuery: >-
+    instrument='HSC'
+    AND exposure.observation_type='bias'
+    AND NOT detector=9
+    AND NOT ( detector=21 AND day_obs > 20250424 ) 
+    AND NOT ( detector=44 AND day_obs> 20261005 )
+    AND NOT detector > 103 
+    AND day_obs>{start_day_obs}
+    AND day_obs<{end_day_obs}
+
+# Template vars used in payloadName / output / dataQuery.
+start_day_obs: "20210601"
+end_day_obs: "20211001"
+
+finalJob:
+  whenRun: SUCCESS
+  requestCpus: 1
+  requestMemory: 4096
+
+site:
+  canfar:
+    image: images.canfar.net/lsst/sciplat-lab:latest_daily
+    envScript: /arc/projects/NewHorizons/env.sh
+    nWorkers: 1
+    cores: 1
+    ram: 4
+    httpTimeout: 180
+    httpRetries: 4
